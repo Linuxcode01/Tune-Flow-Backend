@@ -1,0 +1,52 @@
+# =============================================================================================
+# Local development profile - zero external dependencies.
+#
+#   mvn spring-boot:run -Dspring-boot.run.profiles=dev
+#
+# H2 runs in PostgreSQL compatibility mode with the H2 migration set, caching is in-process
+# (Caffeine), media is stored on disk and events are dispatched in-process instead of via Kafka.
+# The production wiring (Redis, Kafka, MinIO/S3) is a profile switch away and needs no code change.
+# =============================================================================================
+spring:
+  datasource:
+    url: jdbc:h2:mem:tuneflow;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    properties:
+      hibernate:
+        format_sql: false
+  flyway:
+    locations: classpath:db/migration/h2
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+tuneflow:
+  cache:
+    provider: caffeine
+  events:
+    enabled: true
+    publisher: noop
+  storage:
+    provider: local
+    local-base-path: ./data/media
+    # Dev default: hand out absolute signed URLs (http://localhost:8080/api/v1/media/...).
+    # Without it the API returns a root-relative path, which is fine only if every client resolves it
+    # against the API base - and a player that receives a bare path silently refuses to play.
+    public-base-url: ${TUNEFLOW_PUBLIC_BASE_URL:http://localhost:8080}
+  security:
+    expose-reset-token: true     # dev-only: makes the reset flow testable without SMTP
+  seed:
+    enabled: true
+    demo-users: true
+  rate-limit:
+    enabled: true
+    auth-per-minute: 20          # relaxed locally so manual testing is not throttled
+
+logging:
+  level:
+    com.tuneflow: DEBUG
+    org.hibernate.SQL: WARN

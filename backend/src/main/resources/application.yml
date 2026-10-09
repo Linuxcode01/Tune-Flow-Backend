@@ -1,0 +1,203 @@
+# =============================================================================================
+# TuneFlow backend - base configuration
+#
+# Everything environment-specific is supplied through environment variables with local defaults,
+# so `mvn spring-boot:run` works on a developer machine while production injects real secrets
+# (docs section 30: secrets come from environment/secret management, never from Git).
+#
+# Profiles:
+#   default  -> PostgreSQL + Caffeine cache + local storage + in-process events (Kafka/MinIO optional)
+#   dev      -> H2 in-memory, zero external dependencies, demo data seeded   (spring.profiles.active=dev)
+#   prod     -> Redis + Kafka + S3/MinIO, hardened (spring.profiles.active=prod)
+# =============================================================================================
+spring:
+  application:
+    name: tuneflow-backend
+  autoconfigure:
+    # TuneFlow authenticates with JWTs and defines its own SecurityFilterChain, so the default
+    # in-memory user (and its generated password in the logs) is unwanted.
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  data:
+    redis:
+      # Redis is used as a cache/limiter, never as a Spring Data repository store. Disabling
+      # repository scanning keeps startup logs clean and avoids accidental entity mapping.
+      repositories:
+        enabled: false
+  datasource:
+    url: ${TUNEFLOW_DB_URL:jdbc:postgresql://localhost:5432/tuneflow}
+    username: ${TUNEFLOW_DB_USERNAME:tuneflow}
+    password: ${TUNEFLOW_DB_PASSWORD:tuneflow}
+    hikari:
+      maximum-pool-size: ${TUNEFLOW_DB_POOL_SIZE:20}
+      minimum-idle: 2
+      connection-timeout: 10000
+      pool-name: tuneflow-pool
+  jpa:
+    open-in-view: false
+    hibernate:
+      # The schema is owned by Flyway; Hibernate only verifies that entity mappings match it.
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+          time_zone: UTC
+        order_inserts: true
+        order_updates: true
+        query:
+          in_clause_parameter_padding: true
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration/postgresql
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 110MB
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+      fail-on-empty-beans: false
+
+server:
+  address: 0.0.0.0
+  port: ${PORT:8080}
+  compression:
+    enabled: true
+    mime-types: application/json,text/html
+  error:
+    include-message: never
+    include-stacktrace: never
+  forward-headers-strategy: framework
+  shutdown: graceful
+
+logging:
+  level:
+    root: INFO
+    com.tuneflow: ${TUNEFLOW_LOG_LEVEL:INFO}
+    org.hibernate.SQL: WARN
+  pattern:
+    # Never log tokens or passwords; the pattern deliberately omits request bodies.
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  health:
+    # Health checks are opt-in per dependency so an unused Redis/Kafka/MinIO cannot mark the
+    # service DOWN. The prod profile turns on the checks for the infrastructure it actually uses.
+    redis:
+      enabled: false
+    db:
+      enabled: true
+  metrics:
+    tags:
+      application: tuneflow-backend
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: TuneFlow
+    description: Music streaming platform backend
+    version: 1.0.0
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+
+# =============================================================================================
+# TuneFlow settings
+# =============================================================================================
+tuneflow:
+  jwt:
+    # MUST be overridden in production (>= 32 bytes for HS256).
+    secret: ${TUNEFLOW_JWT_SECRET:tuneflow-development-secret-key-change-me-please-32bytes}
+    issuer: tuneflow
+    access-token-ttl: 15m
+    refresh-token-ttl: 30d
+
+  security:
+    # Dev convenience: echo the password-reset token in the API response. Never enable in production.
+    expose-reset-token: ${TUNEFLOW_EXPOSE_RESET_TOKEN:false}
+
+  cache:
+    provider: ${TUNEFLOW_CACHE_PROVIDER:caffeine}   # caffeine | redis
+    default-ttl: 10m
+    song-ttl: 15m
+    album-ttl: 15m
+    artist-ttl: 30m
+    search-ttl: 5m
+    home-feed-ttl: 5m
+    recommendation-ttl: 30m
+
+  events:
+    enabled: ${TUNEFLOW_EVENTS_ENABLED:true}
+    publisher: ${TUNEFLOW_EVENTS_PUBLISHER:noop}    # noop | kafka
+    topic: ${TUNEFLOW_EVENTS_TOPIC:tuneflow.events}
+    consumers-enabled: ${TUNEFLOW_EVENTS_CONSUMERS_ENABLED:true}
+
+  media:
+    signed-url-ttl: 10m
+    default-bitrate-kbps: 128
+    max-audio-size-bytes: 104857600      # 100 MB
+    max-image-size-bytes: 10485760       # 10 MB
+    allowed-audio-formats: mp3,m4a,aac,wav,flac,ogg
+    allowed-image-formats: jpg,jpeg,png,webp
+    ffmpeg-path: ${TUNEFLOW_FFMPEG_PATH:ffmpeg}
+    ffprobe-path: ${TUNEFLOW_FFPROBE_PATH:ffprobe}
+    hls-enabled: ${TUNEFLOW_HLS_ENABLED:false}
+    # Chunked uploads (`/uploads/audio/initiate` -> parts -> complete). The server dictates the chunk
+    # size in the initiate response, so the client never has to guess it.
+    chunk-size-bytes: ${TUNEFLOW_UPLOAD_CHUNK_SIZE:4194304}   # 4 MB
+    upload-session-ttl: ${TUNEFLOW_UPLOAD_SESSION_TTL:24h}
+    chunk-temp-path: ${TUNEFLOW_UPLOAD_TEMP_PATH:./data/uploads}
+
+  storage:
+    provider: ${TUNEFLOW_STORAGE_PROVIDER:local}    # local | s3 (MinIO/AWS)
+    local-base-path: ${TUNEFLOW_MEDIA_PATH:./data/media}
+    public-base-url: ${TUNEFLOW_PUBLIC_BASE_URL:}
+    signing-secret: ${TUNEFLOW_MEDIA_SIGNING_SECRET:}
+    s3:
+      endpoint: ${TUNEFLOW_S3_ENDPOINT:http://localhost:9000}
+      region: ${TUNEFLOW_S3_REGION:us-east-1}
+      bucket: ${TUNEFLOW_S3_BUCKET:tuneflow-media}
+      access-key: ${TUNEFLOW_S3_ACCESS_KEY:minioadmin}
+      secret-key: ${TUNEFLOW_S3_SECRET_KEY:minioadmin}
+      path-style-access: ${TUNEFLOW_S3_PATH_STYLE:true}
+
+  search:
+    provider: ${TUNEFLOW_SEARCH_PROVIDER:jpa}       # jpa | elasticsearch (future)
+
+  cors:
+    allowed-origins: ${TUNEFLOW_CORS_ORIGINS:*}
+    allowed-methods: GET,POST,PUT,PATCH,DELETE,OPTIONS
+    allow-credentials: false
+
+  rate-limit:
+    enabled: ${TUNEFLOW_RATE_LIMIT_ENABLED:true}
+    general-per-minute: 100
+    auth-per-minute: 5
+    upload-per-minute: 10
+
+  seed:
+    enabled: ${TUNEFLOW_SEED_ENABLED:false}
+    demo-users: true
+
+  kafka:
+    bootstrap-servers: ${TUNEFLOW_KAFKA_BOOTSTRAP:localhost:9092}
+    consumer-group-prefix: tuneflow

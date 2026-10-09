@@ -1,0 +1,85 @@
+# =============================================================================================
+# Production profile - full stack wiring (docs sections 32-33).
+#
+# Enable with:  SPRING_PROFILES_ACTIVE=prod
+# Required environment variables (no defaults are safe here):
+#   TUNEFLOW_JWT_SECRET, TUNEFLOW_DB_URL/USERNAME/PASSWORD,
+#   TUNEFLOW_REDIS_HOST, TUNEFLOW_KAFKA_BOOTSTRAP, S3 credentials, TUNEFLOW_CORS_ORIGINS
+# =============================================================================================
+spring:
+  datasource:
+    url: ${TUNEFLOW_DB_URL}
+    username: ${TUNEFLOW_DB_USERNAME}
+    password: ${TUNEFLOW_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${TUNEFLOW_DB_POOL_SIZE:50}
+  jpa:
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 100
+  data:
+    redis:
+      host: ${TUNEFLOW_REDIS_HOST:redis}
+      port: ${TUNEFLOW_REDIS_PORT:6379}
+      password: ${TUNEFLOW_REDIS_PASSWORD:}
+      timeout: 2s
+      lettuce:
+        pool:
+          max-active: 32
+          max-idle: 8
+          min-idle: 2
+
+tuneflow:
+  jwt:
+    secret: ${TUNEFLOW_JWT_SECRET}
+  security:
+    expose-reset-token: false
+  cache:
+    provider: redis
+  events:
+    enabled: true
+    publisher: kafka
+    consumers-enabled: true
+  storage:
+    provider: s3
+    public-base-url: ${TUNEFLOW_CDN_BASE_URL:}
+  search:
+    provider: jpa
+  cors:
+    allowed-origins: ${TUNEFLOW_CORS_ORIGINS:https://app.tuneflow.example}
+    allow-credentials: false
+  rate-limit:
+    enabled: true
+  seed:
+    enabled: false
+    demo-users: false
+
+server:
+  tomcat:
+    threads:
+      max: 200
+    max-connections: 10000
+  forward-headers-strategy: framework
+
+logging:
+  level:
+    root: WARN
+    com.tuneflow: INFO
+  file:
+    name: ${TUNEFLOW_LOG_FILE:./logs/tuneflow.log}
+
+management:
+  endpoint:
+    health:
+      show-details: never
+  health:
+    redis:
+      enabled: true      # production runs a real Redis (cache + rate limiting)
+
+# API docs are disabled in production; enable behind auth if the team wants them on a VPN.
+springdoc:
+  api-docs:
+    enabled: ${TUNEFLOW_API_DOCS_ENABLED:false}
+  swagger-ui:
+    enabled: ${TUNEFLOW_API_DOCS_ENABLED:false}
